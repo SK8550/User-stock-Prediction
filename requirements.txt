@@ -12,3 +12,4 @@ prophet
 matplotlib
 streamlit
 scikit-learn
+seaborn
