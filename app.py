@@ -123,12 +123,17 @@ with st.sidebar:
         stock_name = "Uploaded Data"  # Default name for uploaded data
 
     # Date range (only for Yahoo Finance)
-    if data_source == "Yahoo Finance":
+    if data_source == "Yahoo Finance" or uploaded_file is not None :
         col1, col2 = st.columns(2)
         with col1:
             start_date = st.date_input("Start Date", datetime.date(2020, 1, 1))
         with col2:
-            end_date = st.date_input("End Date", datetime.date.today())
+            try:
+                today = datetime.date.today()
+                new_date = today + datetime.timedelta(days=2)
+                end_date = st.date_input("End Date",new_date )
+            except:
+                st.write("Please select commence date for Future prediction!")
     else:
         # For uploaded files, we'll use the dates from the file
         end_date = datetime.date.today()  # Default value, will be updated after file load
@@ -138,72 +143,44 @@ with st.sidebar:
 
 # Check if end date is in the future
 today = datetime.date.today()
-future_prediction = data_source == "Yahoo Finance" and end_date > today
+future_prediction = data_source == "Yahoo Finance" or uploaded_file is not None and end_date > today
 
-# Process uploaded file if provided
-# Process uploaded file if provided
+
 data = None
+use_uploaded_data = False
+# Process uploaded file if provided
 if data_source == "Upload CSV File" and uploaded_file is not None:
     try:
         data_load_state = st.info('📊 Loading custom data...')
-        uploaded_data = pd.read_csv(uploaded_file)
+        uploaded_data = pd.read_csv(uploaded_file, skiprows=3, header=None)  
+        uploaded_data.columns = ['Date', 'Close', 'High', 'Low', 'Open', 'Volume']
         
-        # Validate required columns
-        if 'Date' not in uploaded_data.columns or 'Close' not in uploaded_data.columns:
-            st.error("CSV file must contain 'Date' and 'Close' columns")
-            st.stop()
-            
-        # Convert and validate Date column with multiple date format attempts
-        date_formats = ['%Y-%m-%d', '%m/%d/%Y', '%d-%m-%Y', '%Y.%m.%d']  # Add more formats as needed
-        
-        def try_parse_date(date_str):
-            for fmt in date_formats:
-                try:
-                    return pd.to_datetime(date_str, format=fmt)
-                except ValueError:
-                    continue
-            return pd.NaT
-        
-        uploaded_data['Date'] = uploaded_data['Date'].apply(try_parse_date)
-        
-        # Check for invalid dates
-        if uploaded_data['Date'].isnull().any():
-            invalid_dates = uploaded_data[uploaded_data['Date'].isnull()]['Date'].index
-            st.error(f"Found {len(invalid_dates)} invalid date values. First 5 problematic rows:")
-            st.write(uploaded_data.loc[invalid_dates[:5]])
-            st.error("Supported date formats: YYYY-MM-DD, MM/DD/YYYY, DD-MM-YYYY, YYYY.MM.DD")
-            st.stop()
-            
-        # Validate Close column
+        uploaded_data['Date'] = pd.to_datetime(uploaded_data['Date'])
         uploaded_data['Close'] = pd.to_numeric(uploaded_data['Close'], errors='coerce')
+        
         if uploaded_data['Close'].isnull().any():
-            problematic_rows = uploaded_data[uploaded_data['Close'].isnull()]
-            st.error(f"Found {len(problematic_rows)} non-numeric values in Close price column. Examples:")
-            st.write(problematic_rows.head())
-            st.stop()
+            st.error("Found non-numeric values in Close price column. Please check your data.")
+            uploaded_file = None
+        else:
+            data = uploaded_data.set_index('Date')[['Close']]
+            data = data.sort_index()
             
-        # Set index and sort
-        data = uploaded_data.set_index('Date')[['Close']].sort_index()
-        
-        # Update date range based on uploaded data
-        start_date = data.index[0].date()
-        end_date = data.index[-1].date()
-        
-        # Check if we have enough data
-        if len(data) < 60:
-            st.error(f"Not enough data points. Need at least 60 records, got {len(data)}")
-            st.stop()
-            
-        data_load_state.success('✅ Custom data loaded successfully!')
-        
-        with st.expander("View uploaded data details"):
-            st.write(f"Data range: {data.index[0].date()} to {data.index[-1].date()}")
-            st.write(f"Number of records: {len(data)}")
-            st.write(data.head())
-            
+            if len(data) == 0:
+                st.error(f"Not enough data points. Need at least {sequence_length * 2} records.")
+                uploaded_file = None
+            else:
+                data_load_state.success('✅ Custom data loaded successfully!')
+                use_uploaded_data = True
+                stock_name_display = "Uploaded Stock Data"
+                
+                with st.expander("View uploaded data preview"):
+                    st.write(data.head())
+                    st.write(f"Data range: {data.index[0]} to {data.index[-1]}")
+    
     except Exception as e:
         st.error(f"Error processing file: {str(e)}")
-        st.stop()
+        uploaded_file = None
+
 
 # Fetch Stock Data if not using uploaded file
 elif data_source == "Yahoo Finance":
@@ -323,6 +300,28 @@ if data is not None and not data.empty:
     plt.xticks(rotation=45)
     st.pyplot(fig1)
 
+
+     # Moving Averages Plot
+    st.markdown("---")
+    st.subheader("📶 Technical Indicators")
+
+    ma_periods = [20, 50]  # Fixed periods for simplicity
+
+    fig3 = plt.figure(figsize=(14, 7))
+    plt.plot(data['Close'], label='Actual Prices', color='blue', linewidth=2)
+
+    ma_colors = ['red', 'green']
+    for idx, period in enumerate(ma_periods):
+        ma = data['Close'].rolling(window=period).mean()
+        plt.plot(ma, label=f'{period}-Day Moving Average', color=ma_colors[idx], linestyle='--')
+
+    plt.title(f"{stock_name} Moving Averages", fontsize=16)
+    plt.xlabel("Time", fontsize=14)
+    plt.ylabel("Price", fontsize=14)
+    plt.legend(fontsize=12)
+    plt.grid(True, linestyle='--', alpha=0.7)
+    st.pyplot(fig3)
+
     # Future Prediction Section
     def make_future_predictions(prediction_days):
         """Generate future predictions based on end date"""
@@ -368,96 +367,78 @@ if data is not None and not data.empty:
             reasoning = f"The stock is predicted to decline by {abs(growth_percent):.2f}% in {prediction_days} days."
         
         return recommendation, box_class, reasoning, growth_percent
-
+    try:
     # Only show future predictions for Yahoo Finance data with future end date
-    if data_source == "Yahoo Finance" and future_prediction:
-        prediction_days = (end_date - today).days
-        st.markdown("---")
-        st.subheader("🔮 Future Price Forecast")
-        st.info(f"Predicting {prediction_days} days into the future (from {today} to {end_date})")
-        
-        # Generate predictions based on days between today and end date
-        future_dates, future_preds = make_future_predictions(prediction_days)
-        
-        # Display future predictions
-        future_df = pd.DataFrame({
-            "Date": future_dates,
-            "Predicted Price": future_preds.flatten()
-        }).set_index("Date")
-        
-        st.write(future_df.style.format({"Predicted Price": "{:.2f}"}))
-        
-        # Plot future predictions
-        fig_future = plt.figure(figsize=(14, 7))
-        
-        # Add last 30 days of actual data
-        last_actual_dates = data.index[-30:]
-        last_actual_prices = data['Close'][-30:]
-        plt.plot(last_actual_dates, last_actual_prices, color='blue', label='Actual Prices', linewidth=2)
-        
-        # Add future predictions
-        plt.plot(future_dates, future_preds, color='green', linestyle='--', marker='o', label='Predicted Prices')
-        
-        plt.title(f"{stock_name} Price Forecast", fontsize=16)
-        plt.xlabel("Date", fontsize=14)
-        plt.ylabel("Price", fontsize=14)
-        plt.legend(fontsize=12)
-        plt.grid(True, linestyle='--', alpha=0.7)
-        st.pyplot(fig_future)
-        
-        # Investment Recommendation
-        initial_price = float(data['Close'].iloc[-1])  # Convert to float to ensure scalar
-        final_price = float(future_preds[-1][0])  # Convert to float to ensure scalar
-        
-        recommendation, box_class, reasoning, growth_percent = generate_recommendation(
-            initial_price, final_price, prediction_days
-        )
-        
-        st.markdown("---")
-        st.subheader("💼 Investment Recommendation")
-        
-        st.markdown(f"""
-        <div class="recommendation-box {box_class}">
-            <h3>Recommendation: {recommendation}</h3>
-            <p>{reasoning}</p>
-            <p><small>Current Price: {initial_price:.2f} → Predicted Price on {end_date}: {final_price:.2f}</small></p>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        st.markdown("""
-        **Important Notes:**
-        - This is not financial advice
-        - Predictions are based on historical patterns
-        - Always consider multiple factors before investing
-        - Past performance doesn't guarantee future results
-        """)
-
-    # Moving Averages Plot
-    st.markdown("---")
-    st.subheader("📶 Technical Indicators")
-
-    ma_periods = [20, 50]  # Fixed periods for simplicity
-
-    fig3 = plt.figure(figsize=(14, 7))
-    plt.plot(data['Close'], label='Actual Prices', color='blue', linewidth=2)
-
-    ma_colors = ['red', 'green']
-    for idx, period in enumerate(ma_periods):
-        ma = data['Close'].rolling(window=period).mean()
-        plt.plot(ma, label=f'{period}-Day Moving Average', color=ma_colors[idx], linestyle='--')
-
-    plt.title(f"{stock_name} Moving Averages", fontsize=16)
-    plt.xlabel("Time", fontsize=14)
-    plt.ylabel("Price", fontsize=14)
-    plt.legend(fontsize=12)
-    plt.grid(True, linestyle='--', alpha=0.7)
-    st.pyplot(fig3)
+        if data_source == "Yahoo Finance" or uploaded_file is not None and future_prediction:
+            prediction_days = (end_date - today).days
+            st.markdown("---")
+            st.subheader("🔮 Future Price Forecast")
+            st.info(f"Predicting {prediction_days} days into the future (from {today} to {end_date})")
+            
+            # Generate predictions based on days between today and end date
+            future_dates, future_preds = make_future_predictions(prediction_days)
+            
+            # Display future predictions
+            future_df = pd.DataFrame({
+                "Date": future_dates,
+                "Predicted Price": future_preds.flatten()
+            }).set_index("Date")
+            
+            st.write(future_df.style.format({"Predicted Price": "{:.2f}"}))
+            
+            # Plot future predictions
+            fig_future = plt.figure(figsize=(14, 7))
+            
+            # Add last 30 days of actual data
+            last_actual_dates = data.index[-30:]
+            last_actual_prices = data['Close'][-30:]
+            plt.plot(last_actual_dates, last_actual_prices, color='blue', label='Actual Prices', linewidth=2)
+            
+            # Add future predictions
+            plt.plot(future_dates, future_preds, color='green', linestyle='--', marker='o', label='Predicted Prices')
+            
+            plt.title(f"{stock_name} Price Forecast", fontsize=16)
+            plt.xlabel("Date", fontsize=14)
+            plt.ylabel("Price", fontsize=14)
+            plt.legend(fontsize=12)
+            plt.grid(True, linestyle='--', alpha=0.7)
+            st.pyplot(fig_future)
+            
+            # Investment Recommendation
+            initial_price = float(data['Close'].iloc[-1])  # Convert to float to ensure scalar
+            final_price = float(future_preds[-1][0])  # Convert to float to ensure scalar
+            
+            recommendation, box_class, reasoning, growth_percent = generate_recommendation(
+                initial_price, final_price, prediction_days
+            )
+            
+            st.markdown("---")
+            st.subheader("💼 Investment Recommendation")
+            
+            st.markdown(f"""
+            <div class="recommendation-box {box_class}">
+                <h3>Recommendation: {recommendation}</h3>
+                <p>{reasoning}</p>
+                <p><small>Current Price: {initial_price:.2f} → Predicted Price on {end_date}: {final_price:.2f}</small></p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            st.markdown("""
+            **Important Notes:**
+            - This is not financial advice
+            - Predictions are based on historical patterns
+            - Always consider multiple factors before investing
+            - Past performance doesn't guarantee future results
+            """)
+    except:
+        st.write("")
+   
 
 # Footer
 st.markdown("---")
 st.markdown("""
     <div style="text-align: center; padding: 20px;">
-        <p>Developed with ❤️ using Streamlit</p>
+        <p>Developed using Streamlit</p>
         <p>ℹ️ For educational purposes only - not financial advice</p>
     </div>
     """, unsafe_allow_html=True)
