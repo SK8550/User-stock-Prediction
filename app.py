@@ -224,6 +224,11 @@ def prepare_linear_data(data, seq_length):
         y.append(data[i, 0])
     return np.array(x), np.array(y)
 
+
+with st.expander("🔍 View Raw Data", expanded=True):
+    st.write(data)
+    st.write("Most likely a stock price represents in USD (United States Dollars) — that's a common unit for stock prices.")
+
 # Only proceed if we have data
 if data is not None and not data.empty:
     # Get and preprocess data
@@ -432,6 +437,18 @@ if data is not None and not data.empty:
             """)
     except:
         st.write("")
+
+    
+    st.markdown("---")
+    st.subheader(f"📥 Download Dataset of {stock_name}")
+
+    csv_data = data.to_csv().encode('utf-8')
+    st.download_button(
+            label="Download Stock Data as CSV",
+            data=csv_data,
+            file_name=f"{stock_name.replace(' ', '_')}_stock_data.csv",
+            mime="text/csv"
+        )
    
 
 # Footer
